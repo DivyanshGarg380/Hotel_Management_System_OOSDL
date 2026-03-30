@@ -1,0 +1,613 @@
+package com.hotel;
+
+// ─────────────────────────────────────────────────────────────
+//  Hotel Management System  ·  Single File JavaFX Application
+//  Java 17+  |  JavaFX 17+  |  No external libraries
+// ─────────────────────────────────────────────────────────────
+
+import javafx.application.Application;
+import javafx.application.Platform;
+import javafx.beans.property.SimpleStringProperty;
+import javafx.collections.FXCollections;
+import javafx.collections.ObservableList;
+import javafx.geometry.Insets;
+import javafx.geometry.Pos;
+import javafx.scene.Scene;
+import javafx.scene.control.*;
+import javafx.scene.layout.*;
+import javafx.stage.Stage;
+
+import java.util.*;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
+
+import com.hotel.HotelManagementSystem.RecommendationEngine;
+import com.hotel.HotelManagementSystem.Room;
+
+public class HotelManagementSystem extends Application {
+
+    // ════════════════════════════════════════════════════════
+    //  1. ROOM  — stores room details
+    // ════════════════════════════════════════════════════════
+    static class Room {
+        int     roomNumber;
+        String  roomType;      // Single / Double / Deluxe
+        double  pricePerDay;
+        boolean available;
+
+        Room(int roomNumber, String roomType, double pricePerDay) {
+            this.roomNumber  = roomNumber;
+            this.roomType    = roomType;
+            this.pricePerDay = pricePerDay;
+            this.available   = true;
+        }
+
+        public String getStatus() { return available ? "Available" : "Occupied"; }
+
+        @Override public String toString() {
+            return "Room " + roomNumber + " (" + roomType + ") $" + pricePerDay + "/day";
+        }
+    }
+
+    // ════════════════════════════════════════════════════════
+    //  2. CUSTOMER  — who made a booking request
+    // ════════════════════════════════════════════════════════
+    static class Customer {
+        String name, contact;
+        int    wantedRoom, days;
+
+        Customer(String name, String contact, int wantedRoom, int days) {
+            this.name = name; this.contact = contact;
+            this.wantedRoom = wantedRoom; this.days = days;
+        }
+    }
+
+    // ════════════════════════════════════════════════════════
+    //  3. BOOKING  — one reservation record
+    // ════════════════════════════════════════════════════════
+    static class Booking {
+        static int nextId = 1001;
+
+        int    bookingId, roomNumber, days;
+        String customerName, contact, status;
+
+        Booking(int roomNumber, String customerName, String contact, int days) {
+            this.bookingId    = nextId++;
+            this.roomNumber   = roomNumber;
+            this.customerName = customerName;
+            this.contact      = contact;
+            this.days         = days;
+            this.status       = "Pending";   // → Confirmed / Timed Out / Checked Out
+        }
+    }
+
+    // ════════════════════════════════════════════════════════
+    //  4. WAITLIST MANAGER  — Queue (FIFO)
+    // ════════════════════════════════════════════════════════
+    static class WaitlistManager {
+        // LinkedList implements Queue — first in, first out
+        Queue<Customer> queue = new LinkedList<>();
+
+        void       add(Customer c)    { queue.add(c); }
+        Customer   removeNext()       { return queue.poll(); }   // null if empty
+        boolean    hasNext()          { return !queue.isEmpty(); }
+        List<Customer> getAll()       { return new ArrayList<>(queue); }
+    }
+
+    // ════════════════════════════════════════════════════════
+    //  5. RECOMMENDATION ENGINE  — budget-based room picker
+    // ════════════════════════════════════════════════════════
+    static class RecommendationEngine {
+
+        static List<String> recommend(List<Room> rooms, double budget, int days) {
+            List<Room> affordable = new ArrayList<>();
+            for (Room r : rooms)
+                if (r.available && r.pricePerDay * days <= budget) affordable.add(r);
+
+            if (affordable.isEmpty())
+                return List.of("No available rooms fit a budget of $" + budget + " for " + days + " day(s).");
+
+            affordable.sort(Comparator.comparingDouble(r -> r.pricePerDay));
+
+            List<String> out = new ArrayList<>();
+
+            // Cheapest — first after ascending sort
+            Room cheapest = affordable.get(0);
+            out.add("Cheapest  →  Room " + cheapest.roomNumber + " (" + cheapest.roomType + ")"
+                    + "  $" + cheapest.pricePerDay + "/night"
+                    + "  |  Total: $" + cheapest.pricePerDay * days);
+
+            // Best Value — highest score = type weight / price
+            Room best = affordable.stream()
+                    .max(Comparator.comparingDouble(RecommendationEngine::score))
+                    .orElse(cheapest);
+            if (best.roomNumber != cheapest.roomNumber)
+                out.add("Best Value  →  Room " + best.roomNumber + " (" + best.roomType + ")"
+                        + "  $" + best.pricePerDay + "/night"
+                        + "  |  Total: $" + best.pricePerDay * days);
+
+            // Premium — most expensive we can still afford
+            Room premium = affordable.get(affordable.size() - 1);
+            if (premium.roomNumber != cheapest.roomNumber && premium.roomNumber != best.roomNumber)
+                out.add("Premium  →  Room " + premium.roomNumber + " (" + premium.roomType + ")"
+                        + "  $" + premium.pricePerDay + "/night"
+                        + "  |  Total: $" + premium.pricePerDay * days);
+
+            return out;
+        }
+
+        // Score: higher room type + lower price = better value
+        static double score(Room r) {
+            double weight = r.roomType.equals("Deluxe") ? 3 :
+                            r.roomType.equals("Double") ? 2 : 1;
+            return weight / r.pricePerDay * 1000;
+        }
+    }
+
+    // ════════════════════════════════════════════════════════
+    //  6. HOTEL SERVICE  — all business logic (thread-safe)
+    //     "synchronized" = only one thread can run this at a time
+    // ════════════════════════════════════════════════════════
+    static class HotelService {
+        Runnable refreshCallback;
+        List<Room>      rooms    = new ArrayList<>();
+        List<Booking>   bookings = new ArrayList<>();
+        WaitlistManager waitlist = new WaitlistManager();
+
+        // Background executor for the 30-second timeout feature
+        ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(4);
+
+        HotelService(Runnable refreshCallback) {
+            this.refreshCallback = refreshCallback;
+            rooms.add(new Room(101, "Single",  50.00));
+            rooms.add(new Room(102, "Single",  55.00));
+            rooms.add(new Room(201, "Double",  90.00));
+            rooms.add(new Room(202, "Double",  95.00));
+            rooms.add(new Room(301, "Deluxe", 150.00));
+            rooms.add(new Room(302, "Deluxe", 175.00));
+        }
+
+        Room findRoom(int num) {
+            for (Room r : rooms) if (r.roomNumber == num) return r;
+            return null;
+        }
+
+        Booking findBooking(int id) {
+            for (Booking b : bookings) if (b.bookingId == id) return b;
+            return null;
+        }
+
+        // ── BOOK ──────────────────────────────────────────
+        // synchronized prevents two threads booking the same room simultaneously
+        synchronized String bookRoom(String name, String contact, int roomNum, int days) {
+            Room room = findRoom(roomNum);
+            if (room == null) return "Room " + roomNum + " does not exist.";
+
+            if (!room.available) {
+                waitlist.add(new Customer(name, contact, roomNum, days));
+                return "Room " + roomNum + " is occupied.\n"
+                     + name + " added to waitlist (position #" + waitlist.queue.size() + ").";
+            }
+
+            room.available = false;
+            Booking b = new Booking(roomNum, name, contact, days);
+            bookings.add(b);
+            startTimeoutTimer(b, room);   // 30-second auto-release thread
+
+            return "Room " + roomNum + " booked for " + name + "!\n"
+                 + "Booking ID: #" + b.bookingId + "\n"
+                 + "Confirm within 30 seconds to avoid auto-release.";
+        }
+
+        // ── CONFIRM ───────────────────────────────────────
+        synchronized String confirmBooking(int id) {
+            Booking b = findBooking(id);
+            if (b == null)                    return "Booking #" + id + " not found.";
+            if (b.status.equals("Timed Out")) return "Booking #" + id + " already timed out.";
+            if (b.status.equals("Confirmed")) return "Booking #" + id + " is already confirmed.";
+            b.status = "Confirmed";
+            return "Booking #" + id + " confirmed!";
+        }
+
+        // ── CHECKOUT ──────────────────────────────────────
+        synchronized String checkoutRoom(int roomNum) {
+            Room room = findRoom(roomNum);
+            if (room == null)     return "Room " + roomNum + " not found.";
+            if (room.available)   return "Room " + roomNum + " is already free.";
+
+            for (Booking b : bookings) {
+                if (b.roomNumber == roomNum
+                        && !b.status.equals("Checked Out")
+                        && !b.status.equals("Timed Out")) {
+                    b.status = "Checked Out";
+                    break;
+                }
+            }
+            room.available = true;
+            String waitlistMsg = assignWaitlistToRoom(roomNum);
+            return "Room " + roomNum + " checked out.\n" + waitlistMsg;
+        }
+
+        // ── AUTO-ASSIGN from Waitlist ──────────────────────
+        synchronized String assignWaitlistToRoom(int roomNum) {
+            if (!waitlist.hasNext()) return "No guests in waitlist.";
+
+            // Prefer someone waiting specifically for this room; else take first in queue
+            Customer next = null;
+            for (Customer c : waitlist.getAll()) {
+                if (c.wantedRoom == roomNum) { next = c; break; }
+            }
+            if (next == null) next = waitlist.removeNext();
+            else              waitlist.queue.remove(next);
+
+            String result = bookRoom(next.name, next.contact, roomNum, next.days);
+            return "Waitlist auto-assigned: " + next.name + "\n" + result;
+        }
+
+        // ── 30-SECOND TIMEOUT THREAD ──────────────────────
+        void startTimeoutTimer(Booking booking, Room room) {
+            scheduler.schedule(() -> {
+                synchronized (HotelService.this) {
+                    if (booking.status.equals("Pending")) {
+                        booking.status = "Timed Out";
+                        room.available = true;
+
+                        Platform.runLater(() -> {
+                            if (refreshCallback != null) refreshCallback.run();
+                        });
+                    }
+                }
+            }, 30, TimeUnit.SECONDS);
+        }
+
+        // ── CONCURRENT BOOKING SIMULATION ─────────────────
+        // N threads all try to book the same room at the same time
+        void simulateConcurrentBooking(int roomNum, int numUsers, TextArea output) {
+            for (int i = 1; i <= numUsers; i++) {
+                final int userId = i;
+                Thread t = new Thread(() -> {
+                    String result = bookRoom("User-" + userId, "555-" + userId, roomNum, 1);
+                    // Platform.runLater() → always update UI from JavaFX thread
+                    Platform.runLater(() ->
+                        output.appendText("Thread-" + userId + ": " + result + "\n\n")
+                    );
+                });
+                t.setDaemon(true);
+                t.start();
+            }
+        }
+
+        void shutdown() { scheduler.shutdownNow(); }
+    }
+
+    // ════════════════════════════════════════════════════════
+    //  7. MAIN APP  — JavaFX UI
+    // ════════════════════════════════════════════════════════
+
+    HotelService service = new HotelService(this::refreshAll);
+
+    ObservableList<Room>    roomData    = FXCollections.observableArrayList();
+    ObservableList<Booking> bookingData = FXCollections.observableArrayList();
+
+    TableView<Room>    roomTable;
+    TableView<Booking> bookingTable;
+    TextArea           waitlistArea;
+
+    @Override
+    public void start(Stage stage) {
+        roomData.addAll(service.rooms);
+
+        TabPane tabs = new TabPane();
+        tabs.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE);
+        tabs.getTabs().addAll(
+            new Tab("Rooms",            buildRoomsTab()),
+            new Tab("Booking",          buildBookingTab()),
+            new Tab("Waitlist",         buildWaitlistTab()),
+            new Tab("Simulation",       buildSimulationTab()),
+            new Tab("Recommendations",  buildRecommendationsTab())
+        );
+
+        stage.setTitle("Hotel Management System");
+        stage.setScene(new Scene(tabs, 1000, 700));
+        stage.setOnCloseRequest(e -> service.shutdown());
+        stage.show();
+    }
+
+    // ─────────────────────────────────────────────
+    //  TAB 1 — Room Management
+    // ─────────────────────────────────────────────
+    VBox buildRoomsTab() {
+        TextField        tfNum   = new TextField(); tfNum.setPromptText("e.g. 103");
+        ComboBox<String> cbType  = new ComboBox<>(FXCollections.observableArrayList("Single","Double","Deluxe"));
+        cbType.setValue("Single");
+        TextField tfPrice = new TextField(); tfPrice.setPromptText("e.g. 70.00");
+        Label     msg     = new Label();
+
+        Button btnAdd   = new Button("Add Room");
+        Button btnAll   = new Button("Show All");
+        Button btnAvail = new Button("Available Only");
+
+        btnAdd.setOnAction(e -> {
+            try {
+                int    num   = Integer.parseInt(tfNum.getText().trim());
+                double price = Double.parseDouble(tfPrice.getText().trim());
+                if (service.findRoom(num) != null) { msg.setText("Room " + num + " already exists!"); return; }
+                Room r = new Room(num, cbType.getValue(), price);
+                service.rooms.add(r);
+                roomData.add(r);
+                msg.setText("Room " + num + " added.");
+                tfNum.clear(); tfPrice.clear();
+            } catch (NumberFormatException ex) { msg.setText("Enter valid number and price."); }
+        });
+
+        btnAll.setOnAction  (e -> { roomData.setAll(service.rooms); msg.setText("Showing all rooms."); });
+        btnAvail.setOnAction(e -> {
+            roomData.clear();
+            for (Room r : service.rooms) if (r.available) roomData.add(r);
+            msg.setText("Showing available rooms only.");
+        });
+
+        GridPane form = form();
+        form.addRow(0, new Label("Room Number:"), tfNum,   new Label("Room Type:"),   cbType);
+        form.addRow(1, new Label("Price/Day ($):"), tfPrice);
+
+        roomTable = new TableView<>(roomData);
+        roomTable.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY);
+        roomTable.getColumns().addAll(
+            col("Room No.", 100, r -> String.valueOf(r.roomNumber)),
+            col("Type",     120, r -> r.roomType),
+            col("$/Day",    110, r -> String.valueOf(r.pricePerDay)),
+            col("Status",   120, r -> r.getStatus())
+        );
+
+        VBox root = new VBox(10,
+            label("Add New Room"), form,
+            row(btnAdd, btnAll, btnAvail, msg),
+            sep(),
+            label("All Rooms"), roomTable
+        );
+        root.setPadding(new Insets(12)); VBox.setVgrow(roomTable, Priority.ALWAYS);
+        return root;
+    }
+
+    // ─────────────────────────────────────────────
+    //  TAB 2 — Booking System
+    // ─────────────────────────────────────────────
+    VBox buildBookingTab() {
+        TextField tfName    = field("Customer name");
+        TextField tfContact = field("Contact number");
+        TextField tfRoom    = field("Room number");
+        TextField tfDays    = field("Days of stay");
+        Label     bookMsg   = new Label();
+        bookMsg.setWrapText(true);
+        bookMsg.setMaxWidth(Double.MAX_VALUE);
+
+        Button btnBook = new Button("Book Room");
+        btnBook.setOnAction(e -> {
+            try {
+                String name = tfName.getText().trim(), contact = tfContact.getText().trim();
+                int rn = Integer.parseInt(tfRoom.getText().trim());
+                int dy = Integer.parseInt(tfDays.getText().trim());
+                if (name.isEmpty() || contact.isEmpty()) { bookMsg.setText("Fill all fields."); return; }
+                bookMsg.setText(service.bookRoom(name, contact, rn, dy));
+                refreshAll(); tfName.clear(); tfContact.clear(); tfRoom.clear(); tfDays.clear();
+            } catch (NumberFormatException ex) { bookMsg.setText("Room and days must be integers."); }
+        });
+
+        GridPane bForm = form();
+        bForm.addRow(0, new Label("Name:"),    tfName,    new Label("Contact:"), tfContact);
+        bForm.addRow(1, new Label("Room No:"), tfRoom,    new Label("Days:"),    tfDays);
+
+        // ── Confirm ──
+        TextField tfCId  = field("Booking ID"); Label confirmMsg = new Label();
+        Button btnConfirm = new Button("Confirm Booking");
+        btnConfirm.setOnAction(e -> {
+            try {
+                confirmMsg.setText(service.confirmBooking(Integer.parseInt(tfCId.getText().trim())));
+                refreshAll(); tfCId.clear();
+            } catch (NumberFormatException ex) { confirmMsg.setText("Enter a valid Booking ID."); }
+        });
+
+        // ── Checkout ──
+        TextField tfCOut = field("Room number"); Label checkMsg = new Label();
+        Button btnCheckout = new Button("Checkout Room");
+        btnCheckout.setOnAction(e -> {
+            try {
+                checkMsg.setText(service.checkoutRoom(Integer.parseInt(tfCOut.getText().trim())));
+                refreshAll(); tfCOut.clear();
+            } catch (NumberFormatException ex) { checkMsg.setText("Enter a valid room number."); }
+        });
+
+        bookingTable = new TableView<>(bookingData);
+        bookingTable.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY);
+        bookingTable.getColumns().addAll(
+            col("ID",       80,  b -> "#" + b.bookingId),
+            col("Room",     70,  b -> String.valueOf(b.roomNumber)),
+            col("Customer", 140, b -> b.customerName),
+            col("Contact",  120, b -> b.contact),
+            col("Days",     60,  b -> String.valueOf(b.days)),
+            col("Status",   110, b -> b.status)
+        );
+
+        HBox bookRow = new HBox(10, btnBook, bookMsg);
+        HBox.setHgrow(bookMsg, Priority.ALWAYS);
+
+        VBox root = new VBox(10,
+            label("Book a Room"), bForm, bookRow,
+            sep(),
+            label("Confirm Booking (must confirm within 30 seconds!)"),
+            row(new Label("Booking ID:"), tfCId, btnConfirm, confirmMsg),
+            sep(),
+            label("Checkout"),
+            row(new Label("Room No:"), tfCOut, btnCheckout, checkMsg),
+            sep(),
+            label("All Bookings"), bookingTable
+        );
+        root.setPadding(new Insets(12)); VBox.setVgrow(bookingTable, Priority.ALWAYS);
+        return root;
+    }
+
+    // ─────────────────────────────────────────────
+    //  TAB 3 — Waitlist
+    // ─────────────────────────────────────────────
+    VBox buildWaitlistTab() {
+        waitlistArea = new TextArea();
+        waitlistArea.setEditable(false);
+        waitlistArea.setPromptText("Waitlist will appear here when rooms are fully booked...");
+
+        Button btnRefresh = new Button("Refresh Waitlist");
+        btnRefresh.setOnAction(e -> refreshWaitlist());
+
+        Label info = new Label(
+            "When a room is booked and another customer tries to book the same room,\n" +
+            "they are added to this FIFO queue (LinkedList).\n" +
+            "When a room is freed, the next person in line is auto-assigned the room."
+        );
+
+        VBox root = new VBox(12, info, btnRefresh, sep(), label("Current Queue"), waitlistArea);
+        root.setPadding(new Insets(15)); VBox.setVgrow(waitlistArea, Priority.ALWAYS);
+        return root;
+    }
+
+    // ─────────────────────────────────────────────
+    //  TAB 4 — Concurrent Simulation
+    // ─────────────────────────────────────────────
+    VBox buildSimulationTab() {
+        TextField tfRoom  = field("Room number (e.g. 201)");
+        TextField tfUsers = field("Number of threads (2–8)");
+        TextArea  output  = new TextArea();
+        output.setEditable(false);
+        output.setPromptText("Results appear here after running...");
+
+        Button btnRun = new Button("Run Simulation");
+        btnRun.setOnAction(e -> {
+            try {
+                int rn = Integer.parseInt(tfRoom.getText().trim());
+                int nu = Integer.parseInt(tfUsers.getText().trim());
+                if (nu < 2 || nu > 8)              { output.setText("Users must be 2–8.");        return; }
+                if (service.findRoom(rn) == null)   { output.setText("Room " + rn + " not found."); return; }
+
+                output.setText("Launching " + nu + " threads on Room " + rn + "...\n\n");
+                service.simulateConcurrentBooking(rn, nu, output);
+
+                // Refresh tables after threads complete
+                Executors.newSingleThreadScheduledExecutor()
+                         .schedule(() -> Platform.runLater(this::refreshAll), 2, TimeUnit.SECONDS);
+
+            } catch (NumberFormatException ex) { output.setText("Enter valid integers."); }
+        });
+
+        Label explanation = new Label(
+            "What this demonstrates:\n\n" +
+            "  • N Java threads are created and all call bookRoom() at the same time.\n\n" +
+            "  • bookRoom() is marked 'synchronized' — meaning the JVM puts a lock on it.\n\n" +
+            "  • Only ONE thread gets the lock and books the room successfully.\n\n" +
+            "  • All other threads wait their turn, then get added to the waitlist.\n\n" +
+            "  • This prevents a 'race condition' where two people book the same room."
+        );
+        explanation.setWrapText(true);
+
+        GridPane form = form();
+        form.addRow(0, new Label("Room No:"), tfRoom, new Label("Users:"), tfUsers);
+
+        VBox root = new VBox(12, explanation, sep(), form, btnRun, sep(), output);
+        root.setPadding(new Insets(15)); VBox.setVgrow(output, Priority.ALWAYS);
+        return root;
+    }
+
+    // ─────────────────────────────────────────────
+    //  TAB 5 — Smart Recommendations
+    // ─────────────────────────────────────────────
+    VBox buildRecommendationsTab() {
+        TextField tfBudget = field("Total budget e.g. 300");
+        TextField tfDays   = field("Number of days e.g. 3");
+        VBox      results  = new VBox(10);
+        Label     msg      = new Label();
+
+        Button btnSearch = new Button("Get Recommendations");
+        btnSearch.setOnAction(e -> {
+            try {
+                double budget = Double.parseDouble(tfBudget.getText().trim());
+                int    days   = Integer.parseInt(tfDays.getText().trim());
+                List<String> recs = RecommendationEngine.recommend(service.rooms, budget, days);
+                results.getChildren().clear();
+                msg.setText("Showing results for $" + budget + " over " + days + " day(s):");
+                for (String rec : recs) {
+                    Label lbl = new Label(rec);
+                    lbl.setWrapText(true); lbl.setMaxWidth(Double.MAX_VALUE);
+                    lbl.setPadding(new Insets(8));
+                    lbl.setStyle("-fx-background-color:#dff0d8; -fx-background-radius:5; -fx-font-size:14;");
+                    results.getChildren().add(lbl);
+                }
+            } catch (NumberFormatException ex) { msg.setText("Enter valid numbers."); }
+        });
+
+        Label info = new Label(
+            "Enter your total budget and how many days you want to stay.\n" +
+            "The engine will suggest the cheapest, best-value, and premium room options\n" +
+            "from the rooms that are currently available."
+        );
+        info.setWrapText(true);
+
+        GridPane form = form();
+        form.addRow(0, new Label("Total Budget ($):"), tfBudget, new Label("Days of Stay:"), tfDays);
+
+        VBox root = new VBox(12, info, sep(), form, btnSearch, msg, new ScrollPane(results) {{ setFitToWidth(true); }});
+        root.setPadding(new Insets(15)); return root;
+    }
+
+    // ─────────────────────────────────────────────
+    //  UI HELPERS  — keep the tab methods short
+    // ─────────────────────────────────────────────
+
+    // Generic TableView column using a lambda
+    <T> TableColumn<T, String> col(String title, int width, Function<T, String> getter) {
+        TableColumn<T, String> c = new TableColumn<>(title);
+        c.setPrefWidth(width);
+        c.setCellValueFactory(data -> new SimpleStringProperty(getter.apply(data.getValue())));
+        return c;
+    }
+
+    GridPane form() {
+        GridPane g = new GridPane();
+        g.setHgap(10); g.setVgap(10); g.setPadding(new Insets(10));
+        return g;
+    }
+
+    HBox row(javafx.scene.Node... nodes) {
+        HBox h = new HBox(10, nodes);
+        h.setAlignment(Pos.CENTER_LEFT); h.setPadding(new Insets(4, 0, 4, 0));
+        return h;
+    }
+
+    TextField field(String prompt) { TextField f = new TextField(); f.setPromptText(prompt); return f; }
+    Label     label(String t)      { Label l = new Label(t); l.setStyle("-fx-font-weight:bold;"); return l; }
+    Separator sep()                { return new Separator(); }
+
+    // Refresh all three data views from the service layer
+    void refreshAll() {
+        roomData.setAll(service.rooms);
+        bookingData.setAll(service.bookings);
+        refreshWaitlist();
+    }
+
+    void refreshWaitlist() {
+        List<Customer> all = service.waitlist.getAll();
+        if (all.isEmpty()) { waitlistArea.setText("Waitlist is empty."); return; }
+        StringBuilder sb = new StringBuilder("Total in queue: " + all.size() + "\n\n");
+        int pos = 1;
+        for (Customer c : all)
+            sb.append("  #").append(pos++).append("  ").append(c.name)
+              .append("  |  ").append(c.contact)
+              .append("  |  Wants Room: ").append(c.wantedRoom)
+              .append("  |  Days: ").append(c.days).append("\n");
+        waitlistArea.setText(sb.toString());
+    }
+
+    // ─────────────────────────────────────────────
+    //  ENTRY POINT
+    // ─────────────────────────────────────────────
+    public static void main(String[] args) { launch(args); }
+}

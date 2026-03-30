@@ -1,0 +1,15 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "java",
+      "name": "Run JavaFX",
+      "request": "launch",
+      "mainClass": "com.hotel.HotelManagementSystem",
+      "vmArgs": "--module-path \"C:\\Users\\HIMYN\\Desktop\\OOSDL_Project\\javafx-sdk-21.0.10\\lib\" --add-modules=javafx.controls,javafx.fxml",
+      "env": {
+        "PATH": "C:\\Users\\HIMYN\\Desktop\\OOSDL_Project\\javafx-sdk-21.0.10\\bin;${env:PATH}"
+      }
+    }
+  ]
+}

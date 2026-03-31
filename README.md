@@ -131,7 +131,7 @@ javac --module-path "javafx-sdk-21.0.10/lib" --add-modules javafx.controls,javaf
 ### Run Command
 
 ```
-java --module-path "C:/javafx-sdk-21/lib" --add-modules javafx.controls,javafx.fxml -cp out com.hotel.HotelManagementSystem
+java --module-path "javafx-sdk-21.0.10/lib" --add-modules javafx.controls,javafx.fxml -cp out com.hotel.HotelManagementSystem
 ```
 
 ---

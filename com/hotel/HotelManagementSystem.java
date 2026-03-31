@@ -1,10 +1,5 @@
 package com.hotel;
 
-// ─────────────────────────────────────────────────────────────
-//  Hotel Management System  ·  Single File JavaFX Application
-//  Java 17+  |  JavaFX 17+  |  No external libraries
-// ─────────────────────────────────────────────────────────────
-
 import javafx.application.Application;
 import javafx.application.Platform;
 import javafx.beans.property.SimpleStringProperty;
@@ -17,6 +12,8 @@ import javafx.scene.control.*;
 import javafx.scene.layout.*;
 import javafx.stage.Stage;
 
+import java.io.*;
+import java.nio.file.*;
 import java.util.*;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -28,20 +25,18 @@ import com.hotel.HotelManagementSystem.Room;
 
 public class HotelManagementSystem extends Application {
 
-    // ════════════════════════════════════════════════════════
-    //  1. ROOM  — stores room details
-    // ════════════════════════════════════════════════════════
+    /* Room Details */
     static class Room {
-        int     roomNumber;
-        String  roomType;      // Single / Double / Deluxe
-        double  pricePerDay;
+        int roomNumber;
+        String roomType;     
+        double pricePerDay;
         boolean available;
 
         Room(int roomNumber, String roomType, double pricePerDay) {
-            this.roomNumber  = roomNumber;
-            this.roomType    = roomType;
+            this.roomNumber = roomNumber;
+            this.roomType = roomType;
             this.pricePerDay = pricePerDay;
-            this.available   = true;
+            this.available = true;
         }
 
         public String getStatus() { return available ? "Available" : "Occupied"; }
@@ -51,54 +46,56 @@ public class HotelManagementSystem extends Application {
         }
     }
 
-    // ════════════════════════════════════════════════════════
-    //  2. CUSTOMER  — who made a booking request
-    // ════════════════════════════════════════════════════════
+    /* Customer Details */
     static class Customer {
         String name, contact;
-        int    wantedRoom, days;
+        int wantedRoom, days;
 
         Customer(String name, String contact, int wantedRoom, int days) {
-            this.name = name; this.contact = contact;
-            this.wantedRoom = wantedRoom; this.days = days;
+            this.name = name; 
+            this.contact = contact;
+            this.wantedRoom = wantedRoom; 
+            this.days = days;
         }
     }
 
-    // ════════════════════════════════════════════════════════
-    //  3. BOOKING  — one reservation record
-    // ════════════════════════════════════════════════════════
+    /* Booking  */
     static class Booking {
         static int nextId = 1001;
 
-        int    bookingId, roomNumber, days;
+        int bookingId, roomNumber, days;
         String customerName, contact, status;
 
         Booking(int roomNumber, String customerName, String contact, int days) {
-            this.bookingId    = nextId++;
-            this.roomNumber   = roomNumber;
+            this.bookingId = nextId++;
+            this.roomNumber = roomNumber;
             this.customerName = customerName;
-            this.contact      = contact;
-            this.days         = days;
-            this.status       = "Pending";   // → Confirmed / Timed Out / Checked Out
+            this.contact = contact;
+            this.days = days;
+            this.status = "Pending";   
+        }
+
+        private Booking(int bookingId, int roomNumber, String customerName, String contact, int days, String status) {
+            this.bookingId = bookingId;
+            this.roomNumber = roomNumber;
+            this.customerName = customerName;
+            this.contact = contact;
+            this.days = days;
+            this.status = status;
         }
     }
 
-    // ════════════════════════════════════════════════════════
-    //  4. WAITLIST MANAGER  — Queue (FIFO)
-    // ════════════════════════════════════════════════════════
+    /* Waitlist manager -> We are implementing LL here */
     static class WaitlistManager {
-        // LinkedList implements Queue — first in, first out
         Queue<Customer> queue = new LinkedList<>();
 
-        void       add(Customer c)    { queue.add(c); }
-        Customer   removeNext()       { return queue.poll(); }   // null if empty
-        boolean    hasNext()          { return !queue.isEmpty(); }
-        List<Customer> getAll()       { return new ArrayList<>(queue); }
+        void add(Customer c) { queue.add(c); }
+        Customer removeNext() { return queue.poll(); }   
+        boolean hasNext() { return !queue.isEmpty(); }
+        List<Customer> getAll() { return new ArrayList<>(queue); }
     }
 
-    // ════════════════════════════════════════════════════════
-    //  5. RECOMMENDATION ENGINE  — budget-based room picker
-    // ════════════════════════════════════════════════════════
+    /* Recommender System */
     static class RecommendationEngine {
 
         static List<String> recommend(List<Room> rooms, double budget, int days) {
@@ -113,13 +110,11 @@ public class HotelManagementSystem extends Application {
 
             List<String> out = new ArrayList<>();
 
-            // Cheapest — first after ascending sort
             Room cheapest = affordable.get(0);
             out.add("Cheapest  →  Room " + cheapest.roomNumber + " (" + cheapest.roomType + ")"
                     + "  $" + cheapest.pricePerDay + "/night"
                     + "  |  Total: $" + cheapest.pricePerDay * days);
 
-            // Best Value — highest score = type weight / price
             Room best = affordable.stream()
                     .max(Comparator.comparingDouble(RecommendationEngine::score))
                     .orElse(cheapest);
@@ -128,7 +123,6 @@ public class HotelManagementSystem extends Application {
                         + "  $" + best.pricePerDay + "/night"
                         + "  |  Total: $" + best.pricePerDay * days);
 
-            // Premium — most expensive we can still afford
             Room premium = affordable.get(affordable.size() - 1);
             if (premium.roomNumber != cheapest.roomNumber && premium.roomNumber != best.roomNumber)
                 out.add("Premium  →  Room " + premium.roomNumber + " (" + premium.roomType + ")"
@@ -138,7 +132,6 @@ public class HotelManagementSystem extends Application {
             return out;
         }
 
-        // Score: higher room type + lower price = better value
         static double score(Room r) {
             double weight = r.roomType.equals("Deluxe") ? 3 :
                             r.roomType.equals("Double") ? 2 : 1;
@@ -146,27 +139,143 @@ public class HotelManagementSystem extends Application {
         }
     }
 
-    // ════════════════════════════════════════════════════════
-    //  6. HOTEL SERVICE  — all business logic (thread-safe)
-    //     "synchronized" = only one thread can run this at a time
-    // ════════════════════════════════════════════════════════
+   /* Data storing */
+    static class DataStore {
+
+        static final Path SAVE_FILE =
+            Paths.get(System.getProperty("user.home"), "hotel_data.dat");
+
+        static synchronized void save(HotelService svc) {
+            try (BufferedWriter w = Files.newBufferedWriter(SAVE_FILE)) {
+
+                w.write("# Hotel Management System — auto-saved data");
+                w.newLine();
+                w.write("# Do not edit manually unless you know the format.");
+                w.newLine();
+                w.newLine();
+
+                w.write("NEXT_ID|" + Booking.nextId);
+                w.newLine();
+                w.newLine();
+
+                for (Room r : svc.rooms) {
+                    w.write("ROOM|" + r.roomNumber + "|" + r.roomType
+                            + "|" + r.pricePerDay + "|" + r.available);
+                    w.newLine();
+                }
+                w.newLine();
+
+                for (Booking b : svc.bookings) {
+                    w.write("BOOKING|" + b.bookingId + "|" + b.roomNumber
+                            + "|" + b.customerName + "|" + b.contact
+                            + "|" + b.days + "|" + b.status);
+                    w.newLine();
+                }
+                w.newLine();
+
+                for (Customer c : svc.waitlist.getAll()) {
+                    w.write("WAITLIST|" + c.name + "|" + c.contact
+                            + "|" + c.wantedRoom + "|" + c.days);
+                    w.newLine();
+                }
+
+            } catch (IOException e) {
+                System.err.println("[DataStore] Save failed: " + e.getMessage());
+            }
+        }
+
+        static boolean load(HotelService svc) {
+            if (!Files.exists(SAVE_FILE)) return false;
+
+            try (BufferedReader r = Files.newBufferedReader(SAVE_FILE)) {
+                String line;
+                while ((line = r.readLine()) != null) {
+                    line = line.trim();
+                    if (line.isEmpty() || line.startsWith("#")) continue;
+
+                    String[] p = line.split("\\|", -1);  
+
+                    switch (p[0]) {
+
+                        case "NEXT_ID" -> {
+                            Booking.nextId = Integer.parseInt(p[1]);
+                        }
+
+                        case "ROOM" -> {
+                            Room room = new Room(
+                                Integer.parseInt(p[1]),     
+                                p[2],                       
+                                Double.parseDouble(p[3])   
+                            );
+                            room.available = Boolean.parseBoolean(p[4]);
+                            svc.rooms.add(room);
+                        }
+
+                        case "BOOKING" -> {
+                            Booking b = new Booking(
+                                Integer.parseInt(p[1]),   
+                                Integer.parseInt(p[2]),   
+                                p[3],                     
+                                p[4],                      
+                                Integer.parseInt(p[5]),    
+                                p[6]                   
+                            );
+                            svc.bookings.add(b);
+                        }
+
+                        case "WAITLIST" -> {
+                            svc.waitlist.add(new Customer(
+                                p[1],                      
+                                p[2],                       
+                                Integer.parseInt(p[3]),    
+                                Integer.parseInt(p[4])  
+                            ));
+                        }
+
+                        default -> System.err.println(
+                            "[DataStore] Unknown record type, skipping: " + p[0]);
+                    }
+                }
+
+                System.out.println("[DataStore] Loaded from " + SAVE_FILE);
+                return true;
+
+            } catch (IOException | NumberFormatException e) {
+                System.err.println("[DataStore] Load failed: " + e.getMessage()
+                    + " — starting fresh.");
+                // Clear any partial data that may have been added
+                svc.rooms.clear();
+                svc.bookings.clear();
+                svc.waitlist.queue.clear();
+                return false;
+            }
+        }
+    }
+
+    /* Hotel Service */
     static class HotelService {
         Runnable refreshCallback;
         List<Room>      rooms    = new ArrayList<>();
         List<Booking>   bookings = new ArrayList<>();
         WaitlistManager waitlist = new WaitlistManager();
 
-        // Background executor for the 30-second timeout feature
         ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(4);
 
         HotelService(Runnable refreshCallback) {
             this.refreshCallback = refreshCallback;
-            rooms.add(new Room(101, "Single",  50.00));
-            rooms.add(new Room(102, "Single",  55.00));
-            rooms.add(new Room(201, "Double",  90.00));
-            rooms.add(new Room(202, "Double",  95.00));
-            rooms.add(new Room(301, "Deluxe", 150.00));
-            rooms.add(new Room(302, "Deluxe", 175.00));
+
+            boolean loaded = DataStore.load(this);
+
+            if (!loaded) {
+                System.out.println("[DataStore] No save file found — seeding default rooms.");
+                rooms.add(new Room(101, "Single",  50.00));
+                rooms.add(new Room(102, "Single",  55.00));
+                rooms.add(new Room(201, "Double",  90.00));
+                rooms.add(new Room(202, "Double",  95.00));
+                rooms.add(new Room(301, "Deluxe", 150.00));
+                rooms.add(new Room(302, "Deluxe", 175.00));
+                DataStore.save(this);
+            }
         }
 
         Room findRoom(int num) {
@@ -179,14 +288,13 @@ public class HotelManagementSystem extends Application {
             return null;
         }
 
-        // ── BOOK ──────────────────────────────────────────
-        // synchronized prevents two threads booking the same room simultaneously
         synchronized String bookRoom(String name, String contact, int roomNum, int days) {
             Room room = findRoom(roomNum);
             if (room == null) return "Room " + roomNum + " does not exist.";
 
             if (!room.available) {
                 waitlist.add(new Customer(name, contact, roomNum, days));
+                DataStore.save(this);  
                 return "Room " + roomNum + " is occupied.\n"
                      + name + " added to waitlist (position #" + waitlist.queue.size() + ").";
             }
@@ -194,24 +302,24 @@ public class HotelManagementSystem extends Application {
             room.available = false;
             Booking b = new Booking(roomNum, name, contact, days);
             bookings.add(b);
-            startTimeoutTimer(b, room);   // 30-second auto-release thread
+            DataStore.save(this);       
+            startTimeoutTimer(b, room);
 
             return "Room " + roomNum + " booked for " + name + "!\n"
                  + "Booking ID: #" + b.bookingId + "\n"
                  + "Confirm within 30 seconds to avoid auto-release.";
         }
 
-        // ── CONFIRM ───────────────────────────────────────
         synchronized String confirmBooking(int id) {
             Booking b = findBooking(id);
             if (b == null)                    return "Booking #" + id + " not found.";
             if (b.status.equals("Timed Out")) return "Booking #" + id + " already timed out.";
             if (b.status.equals("Confirmed")) return "Booking #" + id + " is already confirmed.";
             b.status = "Confirmed";
+            DataStore.save(this);         
             return "Booking #" + id + " confirmed!";
         }
 
-        // ── CHECKOUT ──────────────────────────────────────
         synchronized String checkoutRoom(int roomNum) {
             Room room = findRoom(roomNum);
             if (room == null)     return "Room " + roomNum + " not found.";
@@ -227,14 +335,14 @@ public class HotelManagementSystem extends Application {
             }
             room.available = true;
             String waitlistMsg = assignWaitlistToRoom(roomNum);
+            // assignWaitlistToRoom may call bookRoom which saves; save here too for safety
+            DataStore.save(this);
             return "Room " + roomNum + " checked out.\n" + waitlistMsg;
         }
 
-        // ── AUTO-ASSIGN from Waitlist ──────────────────────
         synchronized String assignWaitlistToRoom(int roomNum) {
             if (!waitlist.hasNext()) return "No guests in waitlist.";
 
-            // Prefer someone waiting specifically for this room; else take first in queue
             Customer next = null;
             for (Customer c : waitlist.getAll()) {
                 if (c.wantedRoom == roomNum) { next = c; break; }
@@ -246,13 +354,13 @@ public class HotelManagementSystem extends Application {
             return "Waitlist auto-assigned: " + next.name + "\n" + result;
         }
 
-        // ── 30-SECOND TIMEOUT THREAD ──────────────────────
         void startTimeoutTimer(Booking booking, Room room) {
             scheduler.schedule(() -> {
                 synchronized (HotelService.this) {
                     if (booking.status.equals("Pending")) {
                         booking.status = "Timed Out";
                         room.available = true;
+                        DataStore.save(this);  
 
                         Platform.runLater(() -> {
                             if (refreshCallback != null) refreshCallback.run();
@@ -262,14 +370,11 @@ public class HotelManagementSystem extends Application {
             }, 30, TimeUnit.SECONDS);
         }
 
-        // ── CONCURRENT BOOKING SIMULATION ─────────────────
-        // N threads all try to book the same room at the same time
         void simulateConcurrentBooking(int roomNum, int numUsers, TextArea output) {
             for (int i = 1; i <= numUsers; i++) {
                 final int userId = i;
                 Thread t = new Thread(() -> {
                     String result = bookRoom("User-" + userId, "555-" + userId, roomNum, 1);
-                    // Platform.runLater() → always update UI from JavaFX thread
                     Platform.runLater(() ->
                         output.appendText("Thread-" + userId + ": " + result + "\n\n")
                     );
@@ -279,12 +384,11 @@ public class HotelManagementSystem extends Application {
             }
         }
 
-        void shutdown() { scheduler.shutdownNow(); }
+        void shutdown() {
+            DataStore.save(this);   
+            scheduler.shutdownNow();
+        }
     }
-
-    // ════════════════════════════════════════════════════════
-    //  7. MAIN APP  — JavaFX UI
-    // ════════════════════════════════════════════════════════
 
     HotelService service = new HotelService(this::refreshAll);
 
@@ -297,7 +401,9 @@ public class HotelManagementSystem extends Application {
 
     @Override
     public void start(Stage stage) {
+        // Populate table views from the (potentially loaded) service data
         roomData.addAll(service.rooms);
+        bookingData.addAll(service.bookings);
 
         TabPane tabs = new TabPane();
         tabs.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE);
@@ -309,15 +415,12 @@ public class HotelManagementSystem extends Application {
             new Tab("Recommendations",  buildRecommendationsTab())
         );
 
-        stage.setTitle("Hotel Management System");
+        stage.setTitle("Hotel Management System  —  data: " + DataStore.SAVE_FILE);
         stage.setScene(new Scene(tabs, 1000, 700));
         stage.setOnCloseRequest(e -> service.shutdown());
         stage.show();
     }
 
-    // ─────────────────────────────────────────────
-    //  TAB 1 — Room Management
-    // ─────────────────────────────────────────────
     VBox buildRoomsTab() {
         TextField        tfNum   = new TextField(); tfNum.setPromptText("e.g. 103");
         ComboBox<String> cbType  = new ComboBox<>(FXCollections.observableArrayList("Single","Double","Deluxe"));
@@ -337,6 +440,7 @@ public class HotelManagementSystem extends Application {
                 Room r = new Room(num, cbType.getValue(), price);
                 service.rooms.add(r);
                 roomData.add(r);
+                DataStore.save(service);    // ← persist newly added room
                 msg.setText("Room " + num + " added.");
                 tfNum.clear(); tfPrice.clear();
             } catch (NumberFormatException ex) { msg.setText("Enter valid number and price."); }

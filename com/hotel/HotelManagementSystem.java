@@ -392,27 +392,26 @@ public class HotelManagementSystem extends Application {
 
     HotelService service = new HotelService(this::refreshAll);
 
-    ObservableList<Room>    roomData    = FXCollections.observableArrayList();
+    ObservableList<Room> roomData = FXCollections.observableArrayList();
     ObservableList<Booking> bookingData = FXCollections.observableArrayList();
 
-    TableView<Room>    roomTable;
+    TableView<Room> roomTable;
     TableView<Booking> bookingTable;
-    TextArea           waitlistArea;
+    TextArea waitlistArea;
 
     @Override
     public void start(Stage stage) {
-        // Populate table views from the (potentially loaded) service data
         roomData.addAll(service.rooms);
         bookingData.addAll(service.bookings);
 
         TabPane tabs = new TabPane();
         tabs.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE);
         tabs.getTabs().addAll(
-            new Tab("Rooms",            buildRoomsTab()),
-            new Tab("Booking",          buildBookingTab()),
-            new Tab("Waitlist",         buildWaitlistTab()),
-            new Tab("Simulation",       buildSimulationTab()),
-            new Tab("Recommendations",  buildRecommendationsTab())
+            new Tab("Rooms", buildRoomsTab()),
+            new Tab("Booking", buildBookingTab()),
+            new Tab("Waitlist", buildWaitlistTab()),
+            new Tab("Simulation", buildSimulationTab()),
+            new Tab("Recommendations", buildRecommendationsTab())
         );
 
         stage.setTitle("Hotel Management System  —  data: " + DataStore.SAVE_FILE);
@@ -421,26 +420,27 @@ public class HotelManagementSystem extends Application {
         stage.show();
     }
 
+
     VBox buildRoomsTab() {
-        TextField        tfNum   = new TextField(); tfNum.setPromptText("e.g. 103");
+        TextField tfNum   = new TextField(); tfNum.setPromptText("e.g. 103");
         ComboBox<String> cbType  = new ComboBox<>(FXCollections.observableArrayList("Single","Double","Deluxe"));
         cbType.setValue("Single");
         TextField tfPrice = new TextField(); tfPrice.setPromptText("e.g. 70.00");
-        Label     msg     = new Label();
+        Label msg = new Label();
 
-        Button btnAdd   = new Button("Add Room");
-        Button btnAll   = new Button("Show All");
+        Button btnAdd = new Button("Add Room");
+        Button btnAll = new Button("Show All");
         Button btnAvail = new Button("Available Only");
 
         btnAdd.setOnAction(e -> {
             try {
-                int    num   = Integer.parseInt(tfNum.getText().trim());
+                int num = Integer.parseInt(tfNum.getText().trim());
                 double price = Double.parseDouble(tfPrice.getText().trim());
                 if (service.findRoom(num) != null) { msg.setText("Room " + num + " already exists!"); return; }
                 Room r = new Room(num, cbType.getValue(), price);
                 service.rooms.add(r);
                 roomData.add(r);
-                DataStore.save(service);    // ← persist newly added room
+                DataStore.save(service);  
                 msg.setText("Room " + num + " added.");
                 tfNum.clear(); tfPrice.clear();
             } catch (NumberFormatException ex) { msg.setText("Enter valid number and price."); }
@@ -476,15 +476,12 @@ public class HotelManagementSystem extends Application {
         return root;
     }
 
-    // ─────────────────────────────────────────────
-    //  TAB 2 — Booking System
-    // ─────────────────────────────────────────────
     VBox buildBookingTab() {
-        TextField tfName    = field("Customer name");
+        TextField tfName = field("Customer name");
         TextField tfContact = field("Contact number");
-        TextField tfRoom    = field("Room number");
-        TextField tfDays    = field("Days of stay");
-        Label     bookMsg   = new Label();
+        TextField tfRoom  = field("Room number");
+        TextField tfDays = field("Days of stay");
+        Label bookMsg = new Label();
         bookMsg.setWrapText(true);
         bookMsg.setMaxWidth(Double.MAX_VALUE);
 
@@ -501,10 +498,9 @@ public class HotelManagementSystem extends Application {
         });
 
         GridPane bForm = form();
-        bForm.addRow(0, new Label("Name:"),    tfName,    new Label("Contact:"), tfContact);
-        bForm.addRow(1, new Label("Room No:"), tfRoom,    new Label("Days:"),    tfDays);
+        bForm.addRow(0, new Label("Name:"), tfName, new Label("Contact:"), tfContact);
+        bForm.addRow(1, new Label("Room No:"), tfRoom, new Label("Days:"), tfDays);
 
-        // ── Confirm ──
         TextField tfCId  = field("Booking ID"); Label confirmMsg = new Label();
         Button btnConfirm = new Button("Confirm Booking");
         btnConfirm.setOnAction(e -> {
@@ -514,7 +510,6 @@ public class HotelManagementSystem extends Application {
             } catch (NumberFormatException ex) { confirmMsg.setText("Enter a valid Booking ID."); }
         });
 
-        // ── Checkout ──
         TextField tfCOut = field("Room number"); Label checkMsg = new Label();
         Button btnCheckout = new Button("Checkout Room");
         btnCheckout.setOnAction(e -> {
@@ -553,9 +548,6 @@ public class HotelManagementSystem extends Application {
         return root;
     }
 
-    // ─────────────────────────────────────────────
-    //  TAB 3 — Waitlist
-    // ─────────────────────────────────────────────
     VBox buildWaitlistTab() {
         waitlistArea = new TextArea();
         waitlistArea.setEditable(false);
@@ -575,9 +567,6 @@ public class HotelManagementSystem extends Application {
         return root;
     }
 
-    // ─────────────────────────────────────────────
-    //  TAB 4 — Concurrent Simulation
-    // ─────────────────────────────────────────────
     VBox buildSimulationTab() {
         TextField tfRoom  = field("Room number (e.g. 201)");
         TextField tfUsers = field("Number of threads (2–8)");
@@ -596,7 +585,6 @@ public class HotelManagementSystem extends Application {
                 output.setText("Launching " + nu + " threads on Room " + rn + "...\n\n");
                 service.simulateConcurrentBooking(rn, nu, output);
 
-                // Refresh tables after threads complete
                 Executors.newSingleThreadScheduledExecutor()
                          .schedule(() -> Platform.runLater(this::refreshAll), 2, TimeUnit.SECONDS);
 
@@ -621,14 +609,11 @@ public class HotelManagementSystem extends Application {
         return root;
     }
 
-    // ─────────────────────────────────────────────
-    //  TAB 5 — Smart Recommendations
-    // ─────────────────────────────────────────────
     VBox buildRecommendationsTab() {
         TextField tfBudget = field("Total budget e.g. 300");
-        TextField tfDays   = field("Number of days e.g. 3");
-        VBox      results  = new VBox(10);
-        Label     msg      = new Label();
+        TextField tfDays = field("Number of days e.g. 3");
+        VBox results  = new VBox(10);
+        Label msg = new Label();
 
         Button btnSearch = new Button("Get Recommendations");
         btnSearch.setOnAction(e -> {
@@ -662,11 +647,6 @@ public class HotelManagementSystem extends Application {
         root.setPadding(new Insets(15)); return root;
     }
 
-    // ─────────────────────────────────────────────
-    //  UI HELPERS  — keep the tab methods short
-    // ─────────────────────────────────────────────
-
-    // Generic TableView column using a lambda
     <T> TableColumn<T, String> col(String title, int width, Function<T, String> getter) {
         TableColumn<T, String> c = new TableColumn<>(title);
         c.setPrefWidth(width);
@@ -687,10 +667,9 @@ public class HotelManagementSystem extends Application {
     }
 
     TextField field(String prompt) { TextField f = new TextField(); f.setPromptText(prompt); return f; }
-    Label     label(String t)      { Label l = new Label(t); l.setStyle("-fx-font-weight:bold;"); return l; }
-    Separator sep()                { return new Separator(); }
+    Label label(String t) { Label l = new Label(t); l.setStyle("-fx-font-weight:bold;"); return l; }
+    Separator sep() { return new Separator(); }
 
-    // Refresh all three data views from the service layer
     void refreshAll() {
         roomData.setAll(service.rooms);
         bookingData.setAll(service.bookings);
@@ -710,8 +689,5 @@ public class HotelManagementSystem extends Application {
         waitlistArea.setText(sb.toString());
     }
 
-    // ─────────────────────────────────────────────
-    //  ENTRY POINT
-    // ─────────────────────────────────────────────
     public static void main(String[] args) { launch(args); }
 }

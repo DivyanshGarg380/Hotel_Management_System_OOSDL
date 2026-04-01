@@ -123,7 +123,7 @@ All classes (Room, Customer, Booking, Service, etc.) are implemented within a si
 ### Compile Command
 
 ```
-javac --module-path "C:/javafx-sdk-21/lib" --add-modules javafx.controls,javafx.fxml -d out src/com/hotel/HotelManagementSystem.java
+javac --module-path "javafx-sdk-21.0.10/lib" --add-modules javafx.controls,javafx.fxml -d out com/hotel/HotelManagementSystem.java
 ```
 
 ---
@@ -131,7 +131,7 @@ javac --module-path "C:/javafx-sdk-21/lib" --add-modules javafx.controls,javafx.
 ### Run Command
 
 ```
-java --module-path "C:/javafx-sdk-21/lib" --add-modules javafx.controls,javafx.fxml -cp out com.hotel.HotelManagementSystem
+java --module-path "javafx-sdk-21.0.10/lib" --add-modules javafx.controls,javafx.fxml -cp out com.hotel.HotelManagementSystem
 ```
 
 ---

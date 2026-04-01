@@ -85,6 +85,68 @@ public class HotelManagementSystem extends Application {
         }
     }
 
+    /* Bill */
+    static class Bill {
+        static int nextBillId = 5001;
+
+        int    billId, bookingId, roomNumber, days;
+        String customerName, contact, roomType;
+        double pricePerDay, totalAmount;
+        String generatedAt;
+
+        Bill(Booking b, Room r) {
+            this.billId        = nextBillId++;
+            this.bookingId     = b.bookingId;
+            this.roomNumber    = b.roomNumber;
+            this.days          = b.days;
+            this.customerName  = b.customerName;
+            this.contact       = b.contact;
+            this.roomType      = r.roomType;
+            this.pricePerDay   = r.pricePerDay;
+            this.totalAmount   = r.pricePerDay * b.days;
+            this.generatedAt   = new java.util.Date().toString();
+        }
+
+        /* Private constructor used by DataStore.load() */
+        private Bill(int billId, int bookingId, int roomNumber, int days,
+                     String customerName, String contact, String roomType,
+                     double pricePerDay, double totalAmount, String generatedAt) {
+            this.billId       = billId;
+            this.bookingId    = bookingId;
+            this.roomNumber   = roomNumber;
+            this.days         = days;
+            this.customerName = customerName;
+            this.contact      = contact;
+            this.roomType     = roomType;
+            this.pricePerDay  = pricePerDay;
+            this.totalAmount  = totalAmount;
+            this.generatedAt  = generatedAt;
+        }
+
+        String toReceipt() {
+            return "========================================\n"
+                 + "         HOTEL CHECKOUT BILL            \n"
+                 + "========================================\n"
+                 + String.format("  Bill ID     : #%d%n", billId)
+                 + String.format("  Booking ID  : #%d%n", bookingId)
+                 + "----------------------------------------\n"
+                 + String.format("  Guest Name  : %s%n", customerName)
+                 + String.format("  Contact     : %s%n", contact)
+                 + "----------------------------------------\n"
+                 + String.format("  Room No.    : %d%n", roomNumber)
+                 + String.format("  Room Type   : %s%n", roomType)
+                 + String.format("  Rate/Night  : $%.2f%n", pricePerDay)
+                 + String.format("  Nights      : %d%n", days)
+                 + "----------------------------------------\n"
+                 + String.format("  TOTAL DUE   : $%.2f%n", totalAmount)
+                 + "========================================\n"
+                 + String.format("  Checked Out : %s%n", generatedAt)
+                 + "========================================\n"
+                 + "    Thank you for staying with us!      \n"
+                 + "========================================";
+        }
+    }
+
     /* Waitlist manager -> We are implementing LL here */
     static class WaitlistManager {
         Queue<Customer> queue = new LinkedList<>();
@@ -156,6 +218,8 @@ public class HotelManagementSystem extends Application {
 
                 w.write("NEXT_ID|" + Booking.nextId);
                 w.newLine();
+                w.write("NEXT_BILL_ID|" + Bill.nextBillId);
+                w.newLine();
                 w.newLine();
 
                 for (Room r : svc.rooms) {
@@ -176,6 +240,16 @@ public class HotelManagementSystem extends Application {
                 for (Customer c : svc.waitlist.getAll()) {
                     w.write("WAITLIST|" + c.name + "|" + c.contact
                             + "|" + c.wantedRoom + "|" + c.days);
+                    w.newLine();
+                }
+                w.newLine();
+
+                for (Bill bill : svc.bills) {
+                    w.write("BILL|" + bill.billId + "|" + bill.bookingId
+                            + "|" + bill.roomNumber + "|" + bill.days
+                            + "|" + bill.customerName + "|" + bill.contact
+                            + "|" + bill.roomType + "|" + bill.pricePerDay
+                            + "|" + bill.totalAmount + "|" + bill.generatedAt);
                     w.newLine();
                 }
 
@@ -199,6 +273,10 @@ public class HotelManagementSystem extends Application {
 
                         case "NEXT_ID" -> {
                             Booking.nextId = Integer.parseInt(p[1]);
+                        }
+
+                        case "NEXT_BILL_ID" -> {
+                            Bill.nextBillId = Integer.parseInt(p[1]);
                         }
 
                         case "ROOM" -> {
@@ -232,6 +310,22 @@ public class HotelManagementSystem extends Application {
                             ));
                         }
 
+                        case "BILL" -> {
+                            Bill bill = new Bill(
+                                Integer.parseInt(p[1]),   
+                                Integer.parseInt(p[2]),  
+                                Integer.parseInt(p[3]), 
+                                Integer.parseInt(p[4]),  
+                                p[5],                 
+                                p[6],                 
+                                p[7],           
+                                Double.parseDouble(p[8]),
+                                Double.parseDouble(p[9]), 
+                                p[10]         
+                            );
+                            svc.bills.add(bill);
+                        }
+
                         default -> System.err.println(
                             "[DataStore] Unknown record type, skipping: " + p[0]);
                     }
@@ -243,9 +337,9 @@ public class HotelManagementSystem extends Application {
             } catch (IOException | NumberFormatException e) {
                 System.err.println("[DataStore] Load failed: " + e.getMessage()
                     + " — starting fresh.");
-                // Clear any partial data that may have been added
                 svc.rooms.clear();
                 svc.bookings.clear();
+                svc.bills.clear();
                 svc.waitlist.queue.clear();
                 return false;
             }
@@ -257,6 +351,7 @@ public class HotelManagementSystem extends Application {
         Runnable refreshCallback;
         List<Room>      rooms    = new ArrayList<>();
         List<Booking>   bookings = new ArrayList<>();
+        List<Bill>      bills    = new ArrayList<>();
         WaitlistManager waitlist = new WaitlistManager();
 
         ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(4);
@@ -325,19 +420,24 @@ public class HotelManagementSystem extends Application {
             if (room == null)     return "Room " + roomNum + " not found.";
             if (room.available)   return "Room " + roomNum + " is already free.";
 
+            Bill generatedBill = null;
             for (Booking b : bookings) {
                 if (b.roomNumber == roomNum
                         && !b.status.equals("Checked Out")
                         && !b.status.equals("Timed Out")) {
                     b.status = "Checked Out";
+                    generatedBill = new Bill(b, room);
+                    bills.add(generatedBill);
                     break;
                 }
             }
             room.available = true;
             String waitlistMsg = assignWaitlistToRoom(roomNum);
-            // assignWaitlistToRoom may call bookRoom which saves; save here too for safety
             DataStore.save(this);
-            return "Room " + roomNum + " checked out.\n" + waitlistMsg;
+            String billInfo = generatedBill != null
+                ? "\n\n" + generatedBill.toReceipt()
+                : "";
+            return "Room " + roomNum + " checked out.\n" + waitlistMsg + billInfo;
         }
 
         synchronized String assignWaitlistToRoom(int roomNum) {
@@ -392,17 +492,20 @@ public class HotelManagementSystem extends Application {
 
     HotelService service = new HotelService(this::refreshAll);
 
-    ObservableList<Room> roomData = FXCollections.observableArrayList();
+    ObservableList<Room>    roomData    = FXCollections.observableArrayList();
     ObservableList<Booking> bookingData = FXCollections.observableArrayList();
+    ObservableList<Bill>    billData    = FXCollections.observableArrayList();
 
-    TableView<Room> roomTable;
+    TableView<Room>    roomTable;
     TableView<Booking> bookingTable;
+    TableView<Bill>    billTable;
     TextArea waitlistArea;
 
     @Override
     public void start(Stage stage) {
         roomData.addAll(service.rooms);
         bookingData.addAll(service.bookings);
+        billData.addAll(service.bills);
 
         TabPane tabs = new TabPane();
         tabs.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE);
@@ -411,7 +514,8 @@ public class HotelManagementSystem extends Application {
             new Tab("Booking", buildBookingTab()),
             new Tab("Waitlist", buildWaitlistTab()),
             new Tab("Simulation", buildSimulationTab()),
-            new Tab("Recommendations", buildRecommendationsTab())
+            new Tab("Recommendations", buildRecommendationsTab()),
+            new Tab("Bills", buildBillsTab())
         );
 
         stage.setTitle("Hotel Management System  —  data: " + DataStore.SAVE_FILE);
@@ -673,6 +777,7 @@ public class HotelManagementSystem extends Application {
     void refreshAll() {
         roomData.setAll(service.rooms);
         bookingData.setAll(service.bookings);
+        billData.setAll(service.bills);
         refreshWaitlist();
     }
 
@@ -687,6 +792,45 @@ public class HotelManagementSystem extends Application {
               .append("  |  Wants Room: ").append(c.wantedRoom)
               .append("  |  Days: ").append(c.days).append("\n");
         waitlistArea.setText(sb.toString());
+    }
+
+    VBox buildBillsTab() {
+        billTable = new TableView<>(billData);
+        billTable.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY);
+        billTable.getColumns().addAll(
+            col("Bill #",    70,  b -> "#" + b.billId),
+            col("Booking #", 80,  b -> "#" + b.bookingId),
+            col("Room",      60,  b -> String.valueOf(b.roomNumber)),
+            col("Type",      80,  b -> b.roomType),
+            col("Guest",     140, b -> b.customerName),
+            col("Contact",   110, b -> b.contact),
+            col("Nights",    60,  b -> String.valueOf(b.days)),
+            col("$/Night",   80,  b -> String.format("%.2f", b.pricePerDay)),
+            col("Total ($)", 90,  b -> String.format("%.2f", b.totalAmount)),
+            col("Date",      180, b -> b.generatedAt)
+        );
+
+        TextArea receiptArea = new TextArea();
+        receiptArea.setEditable(false);
+        receiptArea.setPromptText("Select a bill above to view the full receipt...");
+        receiptArea.setPrefRowCount(18);
+        receiptArea.setStyle("-fx-font-family: monospace;");
+
+        billTable.getSelectionModel().selectedItemProperty().addListener(
+            (obs, old, selected) -> {
+                if (selected != null) receiptArea.setText(selected.toReceipt());
+                else                  receiptArea.clear();
+            }
+        );
+
+        VBox root = new VBox(10,
+            label("All Bills (generated on checkout)"), billTable,
+            sep(),
+            label("Receipt Preview"), receiptArea
+        );
+        root.setPadding(new Insets(12));
+        VBox.setVgrow(billTable, Priority.ALWAYS);
+        return root;
     }
 
     public static void main(String[] args) { launch(args); }

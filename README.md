@@ -1,5 +1,8 @@
 # Hotel Management System (JavaFX)
 
+## Divyansh Garg 240953118   
+## CCE-C Rno: 12
+
 ## Overview
 
 This project is a desktop-based Hotel Management System developed using Java and JavaFX. It provides an interactive graphical user interface to manage hotel operations such as room handling, customer bookings, waitlists, and intelligent recommendations.
